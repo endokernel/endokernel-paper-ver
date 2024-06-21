@@ -1,6 +1,8 @@
+# Endokernel: A Thread Safe Monitor for Lightweight Subprocess Isolation
+
 This repo contains the source code of the endokernel used to make the paper public before publication, and you can compile it with the following command.
 
-# Install
+## Install
 
 To build the endokernel, you can use the following command:
 
@@ -27,7 +29,7 @@ https://github.com/endokernel/test/blob/master/prebuilt/glibc-nocet.zip
 
 But just be aware that the prefix and you may need to add `LD_LIBRARY_PATH` to the `lib` directory of the glibc in order to use it.
 
-# Run applications
+## Run applications
 
 The endokernel is easy to use, you can run the following command with any existing binary:
 
@@ -41,6 +43,24 @@ For example, if you want to run the `ls` command, you can use the following comm
 ./build/libintravirt.so ../glibc-nocet/install/lib ls
 ```
 
-# Compartmentalization
+To get error messages, you can change `int quiet = 1;` to `int quiet = 0;` in `src/libintravirt/printf.c`.
+
+## Compartmentalization
 
 You can use the libiso inside the src directory to compartmentalize the applications as we described in the paper. 
+
+## Other repos
+
+### Runq
+
+We modified [runq](https://github.com/endokernel/runq) to run the container with modified kernel, this allows you to test the endokernel with docker.
+However, the environment has more restrictions, and not every benchmark can run in the container. 
+And if the application does not involve any siganl, you can use normal kernel to run the application.
+
+Because QEMU does not support the CET feature, you cannot test CET configurations with runq.
+
+### Test
+
+We provide a [test](https://github.com/endokernel/test) harness to test the endokernel with different benchmarks.
+Because we need to a specific Ubuntu distribution to run the endokernel, the repo contains a Dockerfile to build the environment and you can run it with runq.
+The test harness also contains prebuilt glibc and intravirt binaries in its Git LFS.
