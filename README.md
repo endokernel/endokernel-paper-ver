@@ -15,7 +15,7 @@ The endokernel will be compiled in the `build` directory.
 
 However, to run the endokernel, you need to use the provided kernel and glibc patches. The kernel patch is in the `kernel_patch` directory, and the glibc patch is in the `glibc_patch` directory.
 
-To make this process easier, we provide a pre-built image with out patches applied.
+To make this process easier, we provide a pre-built image with our patches applied.
 
 https://github.com/endokernel/runq/tree/main/kernel 
 
