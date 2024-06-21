@@ -1,0 +1,828 @@
+diff --git a/csu/Versions b/csu/Versions
+index 43010c3443..e3f6690da6 100644
+--- a/csu/Versions
++++ b/csu/Versions
+@@ -2,6 +2,8 @@ libc {
+   GLIBC_2.0 {
+     # helper functions
+     __libc_init_first; __libc_start_main;
++
++    syscall_trap;
+   }
+   GLIBC_2.1 {
+     # New special glibc functions.
+diff --git a/csu/syscall-trap.S b/csu/syscall-trap.S
+new file mode 120000
+index 0000000000..91a35c889d
+--- /dev/null
++++ b/csu/syscall-trap.S
+@@ -0,0 +1 @@
++../syscall-trap.S
+\ No newline at end of file
+diff --git a/elf/Makefile b/elf/Makefile
+index 0b78721848..d5c09988c1 100644
+--- a/elf/Makefile
++++ b/elf/Makefile
+@@ -21,7 +21,7 @@ subdir		:= elf
+ 
+ include ../Makeconfig
+ 
+-headers		= elf.h bits/elfclass.h link.h bits/link.h
++headers		= elf.h bits/elfclass.h link.h bits/link.h syscall-trap.h
+ routines	= $(all-dl-routines) dl-support dl-iteratephdr \
+ 		  dl-addr dl-addr-obj enbl-secure dl-profstub \
+ 		  dl-origin dl-libc dl-sym dl-sysdep dl-error \
+@@ -34,7 +34,8 @@ dl-routines	= $(addprefix dl-,load lookup object reloc deps hwcaps \
+ 				  version profile tls origin scope \
+ 				  execstack open close trampoline \
+ 				  exception sort-maps lookup-direct \
+-				  call-libc-early-init)
++				  call-libc-early-init) \
++				  syscall-trap
+ ifeq (yes,$(use-ldconfig))
+ dl-routines += dl-cache
+ endif
+diff --git a/elf/Versions b/elf/Versions
+index be88c48e6d..590371ae3d 100644
+--- a/elf/Versions
++++ b/elf/Versions
+@@ -37,6 +37,9 @@ libc {
+ ld {
+   GLIBC_2.0 {
+     _r_debug;
++
++    syscall_trap;
++    gdb_trap;
+   }
+   GLIBC_2.1 {
+     # functions used in other libraries
+diff --git a/elf/dl-close.c b/elf/dl-close.c
+index 8e146ecee1..4aee960aab 100644
+--- a/elf/dl-close.c
++++ b/elf/dl-close.c
+@@ -499,6 +499,7 @@ _dl_close_worker (struct link_map *map, bool force)
+   /* Notify the debugger we are about to remove some loaded objects.  */
+   struct r_debug *r = _dl_debug_initialize (0, nsid);
+   r->r_state = RT_DELETE;
++  gdb_trap(r);
+   _dl_debug_state ();
+   LIBC_PROBE (unmap_start, 2, nsid, r);
+ 
+@@ -813,6 +814,7 @@ _dl_close_worker (struct link_map *map, bool force)
+ 
+   /* Notify the debugger those objects are finalized and gone.  */
+   r->r_state = RT_CONSISTENT;
++  gdb_trap(r);
+   _dl_debug_state ();
+   LIBC_PROBE (unmap_complete, 2, nsid, r);
+ 
+diff --git a/elf/dl-debug.c b/elf/dl-debug.c
+index 4b3d3ad6ba..6708980d74 100644
+--- a/elf/dl-debug.c
++++ b/elf/dl-debug.c
+@@ -73,3 +73,11 @@ _dl_debug_state (void)
+ {
+ }
+ rtld_hidden_def (_dl_debug_state)
++
++#ifdef SHARED
++void
++__attribute__((weak))
++gdb_trap (struct r_debug* target)
++{
++}
++#endif
+diff --git a/elf/dl-load.c b/elf/dl-load.c
+index e39980fb19..7cc7606c9c 100644
+--- a/elf/dl-load.c
++++ b/elf/dl-load.c
+@@ -845,6 +845,7 @@ lose (int code, int fd, const char *name, char *realname, struct link_map *l,
+   if (r != NULL)
+     {
+       r->r_state = RT_CONSISTENT;
++      gdb_trap(r);
+       _dl_debug_state ();
+       LIBC_PROBE (map_failed, 2, nsid, r);
+     }
+@@ -1058,6 +1059,7 @@ _dl_map_object_from_fd (const char *name, const char *origname, int fd,
+ 	 call _dl_debug_initialize in a static program in case dynamic
+ 	 linking has not been used before.  */
+       r->r_state = RT_ADD;
++      gdb_trap(r);
+       _dl_debug_state ();
+       LIBC_PROBE (map_start, 2, nsid, r);
+       make_consistent = true;
+diff --git a/elf/dl-open.c b/elf/dl-open.c
+index 8769e47051..9a3cf7f2e6 100644
+--- a/elf/dl-open.c
++++ b/elf/dl-open.c
+@@ -616,6 +616,7 @@ dl_open_worker (void *a)
+   /* Notify the debugger all new objects are now ready to go.  */
+   struct r_debug *r = _dl_debug_initialize (0, args->nsid);
+   r->r_state = RT_CONSISTENT;
++  gdb_trap(r);
+   _dl_debug_state ();
+   LIBC_PROBE (map_complete, 3, args->nsid, r, new);
+ 
+diff --git a/elf/rtld.c b/elf/rtld.c
+index 5b882163fa..55c29e69c1 100644
+--- a/elf/rtld.c
++++ b/elf/rtld.c
+@@ -1734,6 +1734,7 @@ of this helper program; chances are you did not intend to run this program.\n\
+ 
+   /* We start adding objects.  */
+   r->r_state = RT_ADD;
++  gdb_trap(r);
+   _dl_debug_state ();
+   LIBC_PROBE (init_start, 2, LM_ID_BASE, r);
+ 
+@@ -2444,6 +2445,7 @@ of this helper program; chances are you did not intend to run this program.\n\
+      the address since by now the variable might be in another object.  */
+   r = _dl_debug_initialize (0, LM_ID_BASE);
+   r->r_state = RT_CONSISTENT;
++  gdb_trap(r);
+   _dl_debug_state ();
+   LIBC_PROBE (init_complete, 2, LM_ID_BASE, r);
+ 
+diff --git a/elf/syscall-trap.S b/elf/syscall-trap.S
+new file mode 120000
+index 0000000000..91a35c889d
+--- /dev/null
++++ b/elf/syscall-trap.S
+@@ -0,0 +1 @@
++../syscall-trap.S
+\ No newline at end of file
+diff --git a/syscall-trap.S b/syscall-trap.S
+new file mode 100644
+index 0000000000..56e2f13e51
+--- /dev/null
++++ b/syscall-trap.S
+@@ -0,0 +1,12 @@
++#include <syscall-trap.h>
++
++.weak syscall_trap
++.type syscall_trap,@function
++
++syscall_trap:
++	.cfi_startproc
++	endbr64
++	syscall
++	retq $128
++	.cfi_endproc
++	.size syscall_trap,.-syscall_trap
+diff --git a/syscall-trap.h b/syscall-trap.h
+new file mode 100644
+index 0000000000..cce63c0ea8
+--- /dev/null
++++ b/syscall-trap.h
+@@ -0,0 +1,67 @@
++#ifndef _SYSCALL_TRAP_H_
++#define _SYSCALL_TRAP_H_
++
++#ifdef __ASSEMBLER__
++# ifdef SHARED
++.weak syscall_trap
++.type syscall_trap, @function
++
++#  if defined(PSEUDO) && defined(SYSCALL_NAME) && defined(SYSCALL_SYMBOL)
++#ifdef R_IV
++#   define SYSCALL_TRAP                  \
++    subq $128, %rsp;                    \
++    callq *syscall_trap@GOTPCREL(%rip); \
++    addq $128, %rsp
++#else   // #ifdef R_IV
++#   define SYSCALL_TRAP                  \
++    subq $128, %rsp;                    \
++    callq *syscall_trap@GOTPCREL(%rip);
++#endif  // #ifdef R_IV
++#  else
++#ifdef R_IV
++#   define SYSCALL_TRAP                  \
++    callq *syscall_trap@GOTPCREL(%rip)
++#else    // #ifdef R_IV
++#   define SYSCALL_TRAP                  \
++    subq $128, %rsp;                    \
++    callq *syscall_trap@GOTPCREL(%rip)
++#endif  // #ifdef R_IV
++#  endif
++# else /* !SHARED */
++#   define SYSCALL_TRAP syscall
++# endif
++
++#else /* !__ASSEMBLER__ */
++# ifdef SHARED
++asm (
++".weak syscall_trap\r\n"
++".type syscall_trap, @function\r\n");
++
++#ifdef R_IV
++#  define SYSCALL_TRAP                           \
++    "subq $128, %%rsp\n\t"                     \
++    "callq *syscall_trap@GOTPCREL(%%rip)\n\t"  \
++    "addq $128, %%rsp\n\t"
++#else    // #ifdef R_IV
++#  define SYSCALL_TRAP                           \
++    "subq $128, %%rsp\n\t"                     \
++    "callq *syscall_trap@GOTPCREL(%%rip)\n\t"
++#endif    // #ifdef R_IV
++
++#ifdef R_IV
++#  define SYSCALL_TRAP_ASM                       \
++    "callq *syscall_trap@GOTPCREL(%rip)\n\t"
++#else    // #ifdef R_IV
++#  define SYSCALL_TRAP_ASM                       \
++    "subq $128, %rsp\n\t"                       \
++    "callq *syscall_trap@GOTPCREL(%rip)\n\t"
++#endif    // #ifdef R_IV
++
++# else /* !SHARED */
++#  define SYSCALL_TRAP     "syscall\n\t"
++#  define SYSCALL_TRAP_ASM "syscall\n\t"
++# endif
++
++#endif /* Assembler */
++
++#endif /* _SYSCALL_TRAP_H_ */
+diff --git a/sysdeps/generic/ldsodefs.h b/sysdeps/generic/ldsodefs.h
+index ba114ab4b1..c60c3276b0 100644
+--- a/sysdeps/generic/ldsodefs.h
++++ b/sysdeps/generic/ldsodefs.h
+@@ -1034,6 +1034,12 @@ extern void _dl_sort_maps (struct link_map **maps, unsigned int nmaps,
+ extern void _dl_debug_state (void);
+ rtld_hidden_proto (_dl_debug_state)
+ 
++# ifdef SHARED
++extern void gdb_trap (struct r_debug* target) __attribute__((weak));
++# else
++#  define gdb_trap(r) do {} while (0)
++# endif
++
+ /* Initialize `struct r_debug' if it has not already been done.  The
+    argument is the run-time load address of the dynamic linker, to be put
+    in the `r_ldbase' member.  Returns the address of the structure.  */
+diff --git a/sysdeps/i386/dl-machine.h b/sysdeps/i386/dl-machine.h
+index 0f08079e48..8537503cd6 100644
+--- a/sysdeps/i386/dl-machine.h
++++ b/sysdeps/i386/dl-machine.h
+@@ -159,6 +159,7 @@ extern ElfW(Addr) _dl_profile_fixup (struct link_map *l,
+ .globl _start\n\
+ .globl _dl_start_user\n\
+ _start:\n\
++	endbr32\n\
+ 	movl %esp, %eax\n\
+         subl $12, %esp\n\
+         pushl %eax\n\
+diff --git a/sysdeps/unix/sysv/linux/x86/dl-cet.h b/sysdeps/unix/sysv/linux/x86/dl-cet.h
+index ae97a433a2..e8a2aedb3d 100644
+--- a/sysdeps/unix/sysv/linux/x86/dl-cet.h
++++ b/sysdeps/unix/sysv/linux/x86/dl-cet.h
+@@ -30,3 +30,13 @@ dl_cet_lock_cet (void)
+ {
+   return (int) INTERNAL_SYSCALL_CALL (arch_prctl, ARCH_CET_LOCK, 0);
+ }
++
++static inline int __attribute__ ((always_inline))
++dl_cet_mark_legacy_code (unsigned long addr, unsigned long size, unsigned long set)
++{
++  unsigned long payload[3];
++  payload[0] = addr;
++  payload[1] = size;
++  payload[2] = set;
++  return (int) INTERNAL_SYSCALL_CALL (arch_prctl, ARCH_CET_MARK_LEGACY_CODE, payload);
++}
+diff --git a/sysdeps/unix/sysv/linux/x86/include/asm/prctl.h b/sysdeps/unix/sysv/linux/x86/include/asm/prctl.h
+index 45ad0b052f..e100e15264 100644
+--- a/sysdeps/unix/sysv/linux/x86/include/asm/prctl.h
++++ b/sysdeps/unix/sysv/linux/x86/include/asm/prctl.h
+@@ -24,4 +24,6 @@
+      OUT: allocated shadow stack address: *addr.
+  */
+ # define ARCH_CET_ALLOC_SHSTK	0x3004
++
++# define ARCH_CET_MARK_LEGACY_CODE 0x3007
+ #endif /* ARCH_CET_STATUS */
+diff --git a/sysdeps/unix/sysv/linux/x86_64/____longjmp_chk.S b/sysdeps/unix/sysv/linux/x86_64/____longjmp_chk.S
+index cbce00832c..b662491890 100644
+--- a/sysdeps/unix/sysv/linux/x86_64/____longjmp_chk.S
++++ b/sysdeps/unix/sysv/linux/x86_64/____longjmp_chk.S
+@@ -89,7 +89,7 @@ ENTRY(____longjmp_chk)
+ 	xorl	%edi, %edi
+ 	lea	-sizeSS(%rsp), %RSI_LP
+ 	movl	$__NR_sigaltstack, %eax
+-	syscall
++	SYSCALL_TRAP
+ 	/* Without working sigaltstack we cannot perform the test.  */
+ 	testl	%eax, %eax
+ 	jne	.Lok2
+diff --git a/sysdeps/unix/sysv/linux/x86_64/__start_context.S b/sysdeps/unix/sysv/linux/x86_64/__start_context.S
+index 9f7b00afbe..c87bbe0a8a 100644
+--- a/sysdeps/unix/sysv/linux/x86_64/__start_context.S
++++ b/sysdeps/unix/sysv/linux/x86_64/__start_context.S
+@@ -52,7 +52,7 @@ ENTRY(__push___start_context)
+ 	movl	$ARCH_CET_ALLOC_SHSTK, %edi
+ 	movl	$__NR_arch_prctl, %eax
+ 	/* The new shadow stack base is returned in __ssp[1].  */
+-	syscall
++	SYSCALL_TRAP
+ 	testq	%rax, %rax
+ 	jne	L(hlt)		/* This should never happen.  */
+ 
+diff --git a/sysdeps/unix/sysv/linux/x86_64/clone.S b/sysdeps/unix/sysv/linux/x86_64/clone.S
+index 5ae90f06d3..e270f695b0 100644
+--- a/sysdeps/unix/sysv/linux/x86_64/clone.S
++++ b/sysdeps/unix/sysv/linux/x86_64/clone.S
+@@ -73,7 +73,7 @@ ENTRY (__clone)
+ 	/* End FDE now, because in the child the unwind info will be
+ 	   wrong.  */
+ 	cfi_endproc;
+-	syscall
++	SYSCALL_TRAP
+ 
+ 	testq	%rax,%rax
+ 	jl	SYSCALL_ERROR_LABEL
+@@ -96,7 +96,7 @@ L(thread_start):
+ 	/* Call exit with return value from function call. */
+ 	movq	%rax, %rdi
+ 	movl	$SYS_ify(exit), %eax
+-	syscall
++	SYSCALL_TRAP
+ 	cfi_endproc;
+ 
+ 	cfi_startproc;
+diff --git a/sysdeps/unix/sysv/linux/x86_64/getcontext.S b/sysdeps/unix/sysv/linux/x86_64/getcontext.S
+index debdd891ab..7faa35e66a 100644
+--- a/sysdeps/unix/sysv/linux/x86_64/getcontext.S
++++ b/sysdeps/unix/sysv/linux/x86_64/getcontext.S
+@@ -73,7 +73,7 @@ ENTRY(__getcontext)
+ 	mov	%RSP_LP, %RSI_LP
+ 	movl	$ARCH_CET_STATUS, %edi
+ 	movl	$__NR_arch_prctl, %eax
+-	syscall
++	SYSCALL_TRAP
+ 	testq	%rax, %rax
+ 	jz	L(continue_no_err)
+ 
+@@ -125,7 +125,7 @@ L(no_shstk):
+ #endif
+ 	movl	$_NSIG8,%r10d
+ 	movl	$__NR_rt_sigprocmask, %eax
+-	syscall
++	SYSCALL_TRAP
+ 	cmpq	$-4095, %rax		/* Check %rax for error.  */
+ 	jae	SYSCALL_ERROR_LABEL	/* Jump to error handler if error.  */
+ 
+diff --git a/sysdeps/unix/sysv/linux/x86_64/setcontext.S b/sysdeps/unix/sysv/linux/x86_64/setcontext.S
+index 31bbc9dbe4..10ac814414 100644
+--- a/sysdeps/unix/sysv/linux/x86_64/setcontext.S
++++ b/sysdeps/unix/sysv/linux/x86_64/setcontext.S
+@@ -44,7 +44,7 @@ ENTRY(__setcontext)
+ 	movl	$SIG_SETMASK, %edi
+ 	movl	$_NSIG8,%r10d
+ 	movl	$__NR_rt_sigprocmask, %eax
+-	syscall
++	SYSCALL_TRAP
+ 	/* Pop the pointer into RDX. The choice is arbitrary, but
+ 	   leaving RDI and RSI available for use later can avoid
+ 	   shuffling values.  */
+diff --git a/sysdeps/unix/sysv/linux/x86_64/sigaction.c b/sysdeps/unix/sysv/linux/x86_64/sigaction.c
+index c58a77c5c6..fd969bc1b2 100644
+--- a/sysdeps/unix/sysv/linux/x86_64/sigaction.c
++++ b/sysdeps/unix/sysv/linux/x86_64/sigaction.c
+@@ -78,7 +78,7 @@ asm									\
+    "	.type __" #name ",@function\n"					\
+    "__" #name ":\n"							\
+    "	movq $" #syscall ", %rax\n"					\
+-   "	syscall\n"							\
++   SYSCALL_TRAP_ASM							\
+    ".LEND_" #name ":\n"							\
+    ".section .eh_frame,\"a\",@progbits\n"				\
+    ".LSTARTFRAME_" #name ":\n"						\
+diff --git a/sysdeps/unix/sysv/linux/x86_64/swapcontext.S b/sysdeps/unix/sysv/linux/x86_64/swapcontext.S
+index e071ef6347..8ddf1a46ed 100644
+--- a/sysdeps/unix/sysv/linux/x86_64/swapcontext.S
++++ b/sysdeps/unix/sysv/linux/x86_64/swapcontext.S
+@@ -77,7 +77,7 @@ ENTRY(__swapcontext)
+ 	movl	$SIG_SETMASK, %edi
+ 	movl	$_NSIG8,%r10d
+ 	movl	$__NR_rt_sigprocmask, %eax
+-	syscall
++	SYSCALL_TRAP
+ 	cmpq	$-4095, %rax		/* Check %rax for error.  */
+ 	jae	SYSCALL_ERROR_LABEL	/* Jump to error handler if error.  */
+ 
+@@ -117,7 +117,7 @@ ENTRY(__swapcontext)
+ 	mov	%RSP_LP, %RSI_LP
+ 	movl	$ARCH_CET_STATUS, %edi
+ 	movl	$__NR_arch_prctl, %eax
+-	syscall
++	SYSCALL_TRAP
+ 	testq	%rax, %rax
+ 	jz	L(continue_no_err)
+ 
+diff --git a/sysdeps/unix/sysv/linux/x86_64/syscall-trap.h b/sysdeps/unix/sysv/linux/x86_64/syscall-trap.h
+new file mode 120000
+index 0000000000..3b4f507c27
+--- /dev/null
++++ b/sysdeps/unix/sysv/linux/x86_64/syscall-trap.h
+@@ -0,0 +1 @@
++../../../../../syscall-trap.h
+\ No newline at end of file
+diff --git a/sysdeps/unix/sysv/linux/x86_64/syscall.S b/sysdeps/unix/sysv/linux/x86_64/syscall.S
+index 6c93fc6304..0dd762f16d 100644
+--- a/sysdeps/unix/sysv/linux/x86_64/syscall.S
++++ b/sysdeps/unix/sysv/linux/x86_64/syscall.S
+@@ -34,7 +34,7 @@ ENTRY (syscall)
+ 	movq %r8, %r10
+ 	movq %r9, %r8
+ 	movq 8(%rsp),%r9	/* arg6 is on the stack.  */
+-	syscall			/* Do the system call.  */
++	SYSCALL_TRAP		/* Do the system call.  */
+ 	cmpq $-4095, %rax	/* Check %rax for error.  */
+ 	jae SYSCALL_ERROR_LABEL	/* Jump to error handler if error.  */
+ 	ret			/* Return to caller.  */
+diff --git a/sysdeps/unix/sysv/linux/x86_64/sysdep.h b/sysdeps/unix/sysv/linux/x86_64/sysdep.h
+index bf36875477..7595cd300f 100644
+--- a/sysdeps/unix/sysv/linux/x86_64/sysdep.h
++++ b/sysdeps/unix/sysv/linux/x86_64/sysdep.h
+@@ -22,6 +22,7 @@
+ #include <sysdeps/unix/sysv/linux/sysdep.h>
+ #include <sysdeps/unix/x86_64/sysdep.h>
+ #include <tls.h>
++#include "syscall-trap.h"
+ 
+ /* Defines RTLD_PRIVATE_ERRNO.  */
+ #include <dl-sysdep.h>
+@@ -197,7 +198,7 @@
+     ZERO_EXTEND_##ulong_arg_1			\
+     ZERO_EXTEND_##ulong_arg_2			\
+     movl $SYS_ify (syscall_name), %eax;		\
+-    syscall;
++    SYSCALL_TRAP;
+ 
+ # define DOARGS_0 /* nothing */
+ # define DOARGS_1 /* nothing */
+@@ -243,7 +244,7 @@
+ ({									\
+     unsigned long int resultvar;					\
+     asm volatile (							\
+-    "syscall\n\t"							\
++    SYSCALL_TRAP							\
+     : "=a" (resultvar)							\
+     : "0" (number)							\
+     : "memory", REGISTERS_CLOBBERED_BY_SYSCALL);			\
+@@ -257,7 +258,7 @@
+     TYPEFY (arg1, __arg1) = ARGIFY (arg1);			 	\
+     register TYPEFY (arg1, _a1) asm ("rdi") = __arg1;			\
+     asm volatile (							\
+-    "syscall\n\t"							\
++    SYSCALL_TRAP							\
+     : "=a" (resultvar)							\
+     : "0" (number), "r" (_a1)						\
+     : "memory", REGISTERS_CLOBBERED_BY_SYSCALL);			\
+@@ -273,7 +274,7 @@
+     register TYPEFY (arg2, _a2) asm ("rsi") = __arg2;			\
+     register TYPEFY (arg1, _a1) asm ("rdi") = __arg1;			\
+     asm volatile (							\
+-    "syscall\n\t"							\
++    SYSCALL_TRAP							\
+     : "=a" (resultvar)							\
+     : "0" (number), "r" (_a1), "r" (_a2)				\
+     : "memory", REGISTERS_CLOBBERED_BY_SYSCALL);			\
+@@ -291,7 +292,7 @@
+     register TYPEFY (arg2, _a2) asm ("rsi") = __arg2;			\
+     register TYPEFY (arg1, _a1) asm ("rdi") = __arg1;			\
+     asm volatile (							\
+-    "syscall\n\t"							\
++    SYSCALL_TRAP							\
+     : "=a" (resultvar)							\
+     : "0" (number), "r" (_a1), "r" (_a2), "r" (_a3)			\
+     : "memory", REGISTERS_CLOBBERED_BY_SYSCALL);			\
+@@ -311,7 +312,7 @@
+     register TYPEFY (arg2, _a2) asm ("rsi") = __arg2;			\
+     register TYPEFY (arg1, _a1) asm ("rdi") = __arg1;			\
+     asm volatile (							\
+-    "syscall\n\t"							\
++    SYSCALL_TRAP							\
+     : "=a" (resultvar)							\
+     : "0" (number), "r" (_a1), "r" (_a2), "r" (_a3), "r" (_a4)		\
+     : "memory", REGISTERS_CLOBBERED_BY_SYSCALL);			\
+@@ -333,7 +334,7 @@
+     register TYPEFY (arg2, _a2) asm ("rsi") = __arg2;			\
+     register TYPEFY (arg1, _a1) asm ("rdi") = __arg1;			\
+     asm volatile (							\
+-    "syscall\n\t"							\
++    SYSCALL_TRAP							\
+     : "=a" (resultvar)							\
+     : "0" (number), "r" (_a1), "r" (_a2), "r" (_a3), "r" (_a4),		\
+       "r" (_a5)								\
+@@ -358,7 +359,7 @@
+     register TYPEFY (arg2, _a2) asm ("rsi") = __arg2;			\
+     register TYPEFY (arg1, _a1) asm ("rdi") = __arg1;			\
+     asm volatile (							\
+-    "syscall\n\t"							\
++    SYSCALL_TRAP							\
+     : "=a" (resultvar)							\
+     : "0" (number), "r" (_a1), "r" (_a2), "r" (_a3), "r" (_a4),		\
+       "r" (_a5), "r" (_a6)						\
+diff --git a/sysdeps/unix/sysv/linux/x86_64/vfork.S b/sysdeps/unix/sysv/linux/x86_64/vfork.S
+index 776d2fc610..65ab49a1ca 100644
+--- a/sysdeps/unix/sysv/linux/x86_64/vfork.S
++++ b/sysdeps/unix/sysv/linux/x86_64/vfork.S
+@@ -51,7 +51,7 @@ ENTRY (__vfork)
+ 
+ 	/* Stuff the syscall number in RAX and enter into the kernel.  */
+ 	movl	$SYS_ify (vfork), %eax
+-	syscall
++	SYSCALL_TRAP
+ 
+ #if !SHSTK_ENABLED
+ 	/* Push back the return PC.  */
+diff --git a/sysdeps/unix/sysv/linux/x86_64/x32/times.c b/sysdeps/unix/sysv/linux/x86_64/x32/times.c
+index 864c123117..9dfed917d1 100644
+--- a/sysdeps/unix/sysv/linux/x86_64/x32/times.c
++++ b/sysdeps/unix/sysv/linux/x86_64/x32/times.c
+@@ -26,7 +26,7 @@
+     TYPEFY (arg1, __arg1) = ARGIFY (arg1);			 	\
+     register TYPEFY (arg1, _a1) asm ("rdi") = __arg1;			\
+     asm volatile (							\
+-    "syscall\n\t"							\
++    SYSCALL_TRAP						\
+     : "=a" (resultvar)							\
+     : "0" (number), "r" (_a1)						\
+     : "memory", REGISTERS_CLOBBERED_BY_SYSCALL);			\
+diff --git a/sysdeps/x86/dl-cet.c b/sysdeps/x86/dl-cet.c
+index 03572f7af6..23da37c9ac 100644
+--- a/sysdeps/x86/dl-cet.c
++++ b/sysdeps/x86/dl-cet.c
+@@ -32,6 +32,25 @@
+ # error GNU_PROPERTY_X86_FEATURE_1_SHSTK != X86_FEATURE_1_SHSTK
+ #endif
+ 
++static int
++dl_cet_mark_legacy_region (struct link_map *l)
++{
++  /* Mark PT_LOAD segments with PF_X in legacy code page bitmap.  */
++  size_t i, phnum = l->l_phnum;
++  const ElfW(Phdr) *phdr = l->l_phdr;
++  for (i = 0; i < phnum; i++)
++    if (phdr[i].p_type == PT_LOAD && (phdr[i].p_flags & PF_X))
++      {
++	/* One bit in legacy bitmap represents a page.  */
++	ElfW(Addr) start = (phdr[i].p_vaddr + l->l_addr);
++	ElfW(Addr) len = (phdr[i].p_memsz);
++
++	dl_cet_mark_legacy_code(start, len, 1);
++      }
++
++  return 0;
++}
++
+ /* Check if object M is compatible with CET.  */
+ 
+ static void
+@@ -45,11 +64,12 @@ dl_cet_check (struct link_map *m, const char *program)
+     = GL(dl_x86_feature_control).shstk;
+ 
+   /* No legacy object check if both IBT and SHSTK are always on.  */
++  // Should not compile GLIBC in this mode!!!!
+   if (enable_ibt_type == cet_always_on
+       && enable_shstk_type == cet_always_on)
+     return;
+ 
+-  /* Check if IBT is enabled by kernel.  */
++    /* Check if IBT is enabled by kernel.  */
+   bool ibt_enabled
+     = (GL(dl_x86_feature_1) & GNU_PROPERTY_X86_FEATURE_1_IBT) != 0;
+   /* Check if SHSTK is enabled by kernel.  */
+@@ -59,168 +79,42 @@ dl_cet_check (struct link_map *m, const char *program)
+   if (ibt_enabled || shstk_enabled)
+     {
+       struct link_map *l = NULL;
+-      unsigned int ibt_legacy = 0, shstk_legacy = 0;
+-      bool found_ibt_legacy = false, found_shstk_legacy = false;
+-
+-      /* Check if IBT and SHSTK are enabled in object.  */
+-      bool enable_ibt = (ibt_enabled
+-			 && enable_ibt_type != cet_always_off);
+-      bool enable_shstk = (shstk_enabled
+-			   && enable_shstk_type != cet_always_off);
+-      if (program)
+-	{
+-	  /* Enable IBT and SHSTK only if they are enabled in executable.
+-	     NB: IBT and SHSTK may be disabled by environment variable:
+-
+-	     GLIBC_TUNABLES=glibc.cpu.hwcaps=-IBT,-SHSTK
+-	   */
+-	  enable_ibt &= (CPU_FEATURE_USABLE (IBT)
+-			 && (enable_ibt_type == cet_always_on
+-			     || (m->l_cet & lc_ibt) != 0));
+-	  enable_shstk &= (CPU_FEATURE_USABLE (SHSTK)
+-			   && (enable_shstk_type == cet_always_on
+-			       || (m->l_cet & lc_shstk) != 0));
+-	}
+ 
+       /* ld.so is CET-enabled by kernel.  But shared objects may not
+ 	 support IBT nor SHSTK.  */
+-      if (enable_ibt || enable_shstk)
++      if (1)
+ 	{
+ 	  unsigned int i;
+ 
+ 	  i = m->l_searchlist.r_nlist;
+ 	  while (i-- > 0)
+ 	    {
+-	      /* Check each shared object to see if IBT and SHSTK are
+-		 enabled.  */
+ 	      l = m->l_initfini[i];
+-
+-	      if (l->l_init_called)
+-		continue;
+-
++	      if (l->l_init_called || (l->l_cet & lc_ibt))
++	        continue;
+ #ifdef SHARED
+-	      /* Skip CET check for ld.so since ld.so is CET-enabled.
+-		 CET will be disabled later if CET isn't enabled in
+-		 executable.  */
+ 	      if (l == &GL(dl_rtld_map)
+-		  ||  l->l_real == &GL(dl_rtld_map)
+-		  || (program && l == m))
+-		continue;
++	         || l->l_real == &GL(dl_rtld_map))
++		 continue;
+ #endif
+-
+-	      /* IBT is enabled only if it is enabled in executable as
+-		 well as all shared objects.  */
+-	      enable_ibt &= (enable_ibt_type == cet_always_on
+-			     || (l->l_cet & lc_ibt) != 0);
+-	      if (!found_ibt_legacy && enable_ibt != ibt_enabled)
+-		{
+-		  found_ibt_legacy = true;
+-		  ibt_legacy = i;
+-		}
+-
+-	      /* SHSTK is enabled only if it is enabled in executable as
+-		 well as all shared objects.  */
+-	      enable_shstk &= (enable_shstk_type == cet_always_on
+-			       || (l->l_cet & lc_shstk) != 0);
+-	      if (enable_shstk != shstk_enabled)
+-		{
+-		  found_shstk_legacy = true;
+-		  shstk_legacy = i;
+-		}
+-	    }
+-	}
+-
+-      bool cet_feature_changed = false;
+-
+-      if (enable_ibt != ibt_enabled || enable_shstk != shstk_enabled)
+-	{
+-	  if (!program)
+-	    {
+-	      if (enable_ibt_type != cet_permissive)
+-		{
+-		  /* When IBT is enabled, we cannot dlopen a shared
+-		     object without IBT.  */
+-		  if (found_ibt_legacy)
+-		    _dl_signal_error (0,
+-				      m->l_initfini[ibt_legacy]->l_name,
+-				      "dlopen",
+-				      N_("rebuild shared object with IBT support enabled"));
+-		}
+-
+-	      if (enable_shstk_type != cet_permissive)
+-		{
+-		  /* When SHSTK is enabled, we cannot dlopen a shared
+-		     object without SHSTK.  */
+-		  if (found_shstk_legacy)
+-		    _dl_signal_error (0,
+-				      m->l_initfini[shstk_legacy]->l_name,
+-				      "dlopen",
+-				      N_("rebuild shared object with SHSTK support enabled"));
+-		}
+-
+-	      if (enable_ibt_type != cet_permissive
+-		  && enable_shstk_type != cet_permissive)
+-		return;
+-	    }
+-
+-	  /* Disable IBT and/or SHSTK if they are enabled by kernel, but
+-	     disabled in executable or shared objects.  */
+-	  unsigned int cet_feature = 0;
+-
+-	  if (!enable_ibt)
+-	    cet_feature |= GNU_PROPERTY_X86_FEATURE_1_IBT;
+-	  if (!enable_shstk)
+-	    cet_feature |= GNU_PROPERTY_X86_FEATURE_1_SHSTK;
+-
+-	  int res = dl_cet_disable_cet (cet_feature);
+-	  if (res != 0)
+-	    {
+-	      if (program)
+-		_dl_fatal_printf ("%s: can't disable CET\n", program);
+-	      else
+-		{
+-		  if (found_ibt_legacy)
+-		    l = m->l_initfini[ibt_legacy];
+-		  else
+-		    l = m->l_initfini[shstk_legacy];
+-		  _dl_signal_error (-res, l->l_name, "dlopen",
+-				    N_("can't disable CET"));
+-		}
+-	    }
+-
+-	  /* Clear the disabled bits in dl_x86_feature_1.  */
+-	  GL(dl_x86_feature_1) &= ~cet_feature;
+-
+-	  cet_feature_changed = true;
+-	}
+-
+-#ifdef SHARED
+-      if (program && (ibt_enabled || shstk_enabled))
+-	{
+-	  if ((!ibt_enabled
+-	       || enable_ibt_type != cet_permissive)
+-	      && (!shstk_enabled
+-		  || enable_shstk_type != cet_permissive))
+-	    {
+-	      /* Lock CET if IBT or SHSTK is enabled in executable unless
+-	         IBT or SHSTK is enabled permissively.  */
+-	      int res = dl_cet_lock_cet ();
++	      int res = dl_cet_mark_legacy_region (l);
+ 	      if (res != 0)
+-		_dl_fatal_printf ("%s: can't lock CET\n", program);
++	        {
++		  if (program)
++		    _dl_fatal_printf ("%s: failed to mark legacy code region\n", l->l_name);
++		  else 
++		    _dl_signal_error (-res, l->l_name, "dlopen",
++					  N_("failed to mark legacy code region"));
++		}
+ 	    }
+-
+-	  /* Set feature_1 if IBT or SHSTK is enabled in executable.  */
+-	  cet_feature_changed = true;
+ 	}
+-#endif
+ 
+-      if (cet_feature_changed)
+-	{
++	  // CET will be enabled anyway, because our loader has CET enabled
++      if (1)
++	{ 
+ 	  unsigned int feature_1 = 0;
+-	  if (enable_ibt)
+-	    feature_1 |= GNU_PROPERTY_X86_FEATURE_1_IBT;
+-	  if (enable_shstk)
+-	    feature_1 |= GNU_PROPERTY_X86_FEATURE_1_SHSTK;
++	  feature_1 |= GNU_PROPERTY_X86_FEATURE_1_IBT;
++	  feature_1 |= GNU_PROPERTY_X86_FEATURE_1_SHSTK;
+ 	  struct pthread *self = THREAD_SELF;
+ 	  THREAD_SETMEM (self, header.feature_1, feature_1);
+ 	}
+diff --git a/sysdeps/x86_64/dl-machine.h b/sysdeps/x86_64/dl-machine.h
+index ca73d8fef9..0cc5dd1ce6 100644
+--- a/sysdeps/x86_64/dl-machine.h
++++ b/sysdeps/x86_64/dl-machine.h
+@@ -144,6 +144,7 @@ elf_machine_runtime_setup (struct link_map *l, int lazy, int profile)
+ .globl _start\n\
+ .globl _dl_start_user\n\
+ _start:\n\
++	endbr64\n\
+ 	movq %rsp, %rdi\n\
+ 	call _dl_start\n\
+ _dl_start_user:\n\
+diff --git a/sysdeps/x86_64/nptl/tls.h b/sysdeps/x86_64/nptl/tls.h
+index 7ba9c4e69b..a63f048112 100644
+--- a/sysdeps/x86_64/nptl/tls.h
++++ b/sysdeps/x86_64/nptl/tls.h
+@@ -29,6 +29,7 @@
+ # include <libc-pointer-arith.h> /* For cast_to_integer.  */
+ # include <kernel-features.h>
+ # include <dl-dtv.h>
++# include <syscall-trap.h>
+ 
+ /* Replacement type for __m128 since this file is included by ld.so,
+    which is compiled with -mno-sse.  It must not change the alignment
+@@ -161,7 +162,7 @@ _Static_assert (offsetof (tcbhead_t, __glibc_unused2) == 0x80,
+      _head->self = _thrdescr;						      \
+ 									      \
+      /* It is a simple syscall to set the %fs value for the thread.  */	      \
+-     asm volatile ("syscall"						      \
++     asm volatile (SYSCALL_TRAP					      \
+ 		   : "=a" (_result)					      \
+ 		   : "0" ((unsigned long int) __NR_arch_prctl),		      \
+ 		     "D" ((unsigned long int) ARCH_SET_FS),		      \
+diff --git a/sysdeps/x86_64/x32/dl-machine.h b/sysdeps/x86_64/x32/dl-machine.h
+index c4e51f0fcc..3bcd358153 100644
+--- a/sysdeps/x86_64/x32/dl-machine.h
++++ b/sysdeps/x86_64/x32/dl-machine.h
+@@ -40,6 +40,7 @@
+ .globl _start\n\
+ .globl _dl_start_user\n\
+ _start:\n\
++	endbr32\n\
+ 	movl %esp, %edi\n\
+ 	call _dl_start\n\
+ _dl_start_user:\n\

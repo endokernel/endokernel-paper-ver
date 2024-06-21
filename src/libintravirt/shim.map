@@ -1,0 +1,4 @@
+SHIM {
+    global: _r_debug; _dl_debug_state; erim_init; erim_malloc;
+    local: *;
+};

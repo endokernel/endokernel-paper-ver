@@ -1,0 +1,3 @@
+This file contains a patched glibc using version. 
+
+We made the changes on version 2.32, but please note that the native 2.32 version of glibc will not work with the kernel we provided, and you will need to also disable CET when compiling the distribution's glibc, or use a a distro with lower glibc version like Ubuntu 20.04. If you do this, the distribution-supplied binaries may not be fully compatible with this 2.32 glibc, so please be aware of this.
