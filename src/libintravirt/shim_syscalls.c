@@ -924,6 +924,7 @@ SHIM_SYSCALL_EMULATED(mmap, 6, void*, void*, addr, size_t, length, int, prot, in
         }
     }
 end:
+    map_unlock_read_all();
     MEMUNLOCK;
     return (void*) mem;
 }
@@ -1047,6 +1048,7 @@ SHIM_SYSCALL_EMULATED(munmap, 2, int, void*, addr, size_t, len) {
     }
     map_clear(adr);
 end:
+    map_unlock_read_all();
     MEMUNLOCK;
     return e;
 }
@@ -1399,6 +1401,7 @@ SHIM_SYSCALL_EMULATED(readv, 3, ssize_t, int, fd, const struct iovec*, vec, int,
     ssize_t write_cnt = writev_test(vec, vlen);
 
     if (write_cnt < 0) {
+        map_unlock_read_all();
         release_iov(id);
         return write_cnt;
     }
@@ -1445,6 +1448,7 @@ SHIM_SYSCALL_EMULATED(writev, 3, ssize_t, int, fd, const struct iovec*, vec, int
 
     if (len_sum < 0) {
         release_iov(id);
+        map_unlock_read_all();
         //printf("F1\n");
         return len_sum;
     }
@@ -1539,6 +1543,7 @@ SHIM_SYSCALL_EMULATED(mremap, 5, void*, void*, addr, size_t, old_len, size_t, ne
         //}
     }
 end:
+    map_unlock_read_all();
     MEMUNLOCK;
     return (void*) new_addr_f;
 }
@@ -2119,11 +2124,13 @@ SHIM_SYSCALL_EMULATED(preadv, 5, int, unsigned long, fd, const struct iovec*, ve
 
     ssize_t vec_len = writev_test(vec, vlen);
     if (vec_len < 0) {
+	map_unlock_read_all();
         return vec_len;
     }
         
     int res;
     if (fd >= 4096 || subscribed[fd] == NO_FILE) {
+	map_unlock_read_all();
         res = -EBADF;
         return res;
     }
@@ -2167,11 +2174,14 @@ SHIM_SYSCALL_EMULATED(pwritev, 5, int, unsigned long, fd, const struct iovec*, v
     vec = copy_iov((void*)vec, vlen, &id);
     
     ssize_t len_sum = readv_test(vec, vlen);
-    if (len_sum < 0)
+    if (len_sum < 0) {
+	
+        map_unlock_read_all();
         return len_sum;
-    
+    }
     int res;
     if (fd >= 4096 || subscribed[fd] == NO_FILE) {
+	map_unlock_read_all();
         res = -EBADF;
         return res;
     }
@@ -2503,18 +2513,21 @@ SHIM_SYSCALL_EMULATED(preadv2, 6, ssize_t, int, fd, const struct iovec*, iov, in
     iov = copy_iov((void*)iov, iovcnt, &id);
     
     if (flags & ~(RWF_DSYNC | RWF_HIPRI | RWF_SYNC | RWF_NOWAIT |0x00000010)) {
+	map_unlock_read_all();
         release_iov(id);
         return -EOPNOTSUPP;
     }
 
     ssize_t len_sum = writev_test(iov, iovcnt);
     if (len_sum < 0) {
+	map_unlock_read_all();
         release_iov(id);
         return len_sum;
     }
 
     ssize_t res;
     if (fd < 0 || fd >= 4096 || subscribed[fd] == NO_FILE) {
+	map_unlock_read_all();
         release_iov(id);
         res = -EBADF;
         return res;
@@ -2836,12 +2849,14 @@ SHIM_SYSCALL_EMULATED(signalfd4, 4, int, int, ufd, __sigset_t*, user_mask, size_
 
 
 // ioctl
+/*
 SHIM_SYSCALL_EMULATED(ioctl, 3, int, int, fd, unsigned long, request, unsigned long, arg) {
     UNUSED(request);
     UNUSED(arg);
     UNUSED(fd);
     return -1;
 }
+*/
 
 // vmsplice
 
@@ -3378,8 +3393,10 @@ SHIM_SYSCALL_EMULATED(shmat, 3, void*, int, shmid, const void*, shmaddr, int, sh
         goto out;
     }
     void* addr = rawcall(shmat, shmid, shmaddr, shmflg);
-    if (addr < 0)
+    if (addr < 0) {
+        map_unlock_read_all();
         return addr;
+    }
     map_set(map_addr(addr, addr + size - 1), m);
     res = -ENOMEM;
     for (int i = 0; i < 32; i++) {
@@ -3395,6 +3412,8 @@ SHIM_SYSCALL_EMULATED(shmat, 3, void*, int, shmid, const void*, shmaddr, int, sh
     }
     rawcall(shmdt, addr);    
 out:
+    
+    map_unlock_read_all();
     MEMUNLOCK;
     return res;
 }

@@ -5,7 +5,7 @@
 #include <mt.h>
 
 // TODO: We can upgrade to interval tree for better performance 
-#define MAXLOCK 64
+#define MAXLOCK 512
 typedef struct {
     map_block_t *b;
     uintptr_t idx;
@@ -172,8 +172,13 @@ int map_prot(map_mode_t mode) {
     return prot;
 }
 
-int read_lock_entry(volatile map_entry_t* e, int n) {
+int read_lock_entry(volatile map_entry_t* e, int *n) {
     // atomic operation
+    int maxn = get_tls()->self->locked_count;
+    map_entry_t** entries = get_tls()->self->map_locked;
+    for (int i = 0; i < maxn; i++) {
+        if (e == entries[i]) return 1; // already locked
+    }
     while (1) {
         map_lock_t old = e->lock_obj;
         if (old.lock_mode == 0) {
@@ -183,7 +188,8 @@ int read_lock_entry(volatile map_entry_t* e, int n) {
             }
             new.lock_count ++;
             if (__sync_bool_compare_and_swap(&e->lock_obj.lock, old.lock, new.lock)) {
-                get_tls()->self->map_locked[n] = e;
+                get_tls()->self->map_locked[*n] = e;
+                *n++;
                 return 1;
             }
         } else {
@@ -216,18 +222,17 @@ int map_lock_read(map_addr_t addr) {
 
     for (map_block_t* tail = gTail; tail; tail = tail->prev) {
         for (uintptr_t idx = 0; idx < max_entry; idx++) {
-            map_entry_t e = tail->entries[idx];
-            if (e.mode != NONE) {
+            map_entry_t *e = &tail->entries[idx];
+            if (e->mode != NONE) {
                 map_addr_t overlap = intersection(addr, tail->entries[idx].addr);
                 if (overlap.high != 0 && overlap.low != 0) {
                     // try lock the address
                     if (n >= MAXLOCK) {
                         goto failed;
                     }
-                    if (read_lock_entry(&e, n) != 1) {
+                    if (read_lock_entry(e, &n) != 1) {
                         goto failed;
                     } else {
-                        n++;
                     }
                 }
             }
@@ -274,7 +279,7 @@ int write_lock_entry(volatile map_entry_t* e) {
 }
 
 int map_lock_write(map_addr_t addr) {
-    map_entry_t* locked[MAXLOCK];
+    map_entry_t* locked[64];
     int n = 0;
     for (map_block_t* tail = gTail; tail; tail = tail->prev) {
         for (uintptr_t idx = 0; idx < max_entry; idx++) {
@@ -282,7 +287,7 @@ int map_lock_write(map_addr_t addr) {
             if (e.mode != NONE) {
                 map_addr_t overlap = intersection(addr, tail->entries[idx].addr);
                 if (overlap.high != 0 && overlap.low != 0) {
-                    if (n >= MAXLOCK) {
+                    if (n >= 64) {
                         goto failed;
                     }
                     if (write_lock_entry(&e) != 1) {
@@ -370,10 +375,12 @@ int map_check_lock(map_addr_t addr, map_mode_t rwe) {
                     if ((e->mode & TRUSTED_MEM) || (e->mode == NONE)) {
                         goto failed;
                     }
-                    if (n == MAXLOCK)
+                    if (n == MAXLOCK) {
+                        rawcall(write, 1, "maxlock\n", 8);
                         goto failed;
-                    if (read_lock_entry(e, n) == 1) {
-                        n++;
+                    }
+                    if (read_lock_entry(e, &n) == 1) {
+                        //
                     } else {
                         printf("lock failed\n");
                         goto failed;

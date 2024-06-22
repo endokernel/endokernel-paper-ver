@@ -34,7 +34,6 @@ DEFINE_STRUCT(iv_tls)
     DEFINE_FIELD(unsigned long, fast_syscall);
     DEFINE_FIELD(unsigned long, previous_fastsp);
 
-    DEFINE_ARY(void*, map_locked, 64);
     DEFINE_FIELD(unsigned long, locked_count);
 #ifdef APPPERF
     DEFINE_ARY(unsigned long, app_count, 16);
@@ -68,6 +67,7 @@ DEFINE_STRUCT(iv_tls)
 // This might be useful for iterating all tls
 // But not actually used now
     DEFINE_FIELD(unsigned long, vfork);
+    DEFINE_ARY(void*, map_locked, 512);
     DEFINE_FIELD(struct iv_tls*, next);
 END_STRUCT(iv_tls)
 

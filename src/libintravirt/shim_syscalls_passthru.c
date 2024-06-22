@@ -36,7 +36,7 @@ SHIM_SYSCALL_PASSTHRU(poll, 3, int, struct pollfd*, fds, nfds_t, nfds, int, time
 
 //SHIM_SYSCALL_PASSTHRU(rt_sigreturn, 1, int, int, __unused)
 
-//SHIM_SYSCALL_PASSTHRU(ioctl, 3, int, int, fd, int, cmd, unsigned long, arg)
+SHIM_SYSCALL_PASSTHRU(ioctl, 3, int, int, fd, int, cmd, unsigned long, arg)
 
 //SHIM_SYSCALL_PASSTHRU(pread64, 4, size_t, int, fd, char*, buf, size_t, count, loff_t, pos)
 
